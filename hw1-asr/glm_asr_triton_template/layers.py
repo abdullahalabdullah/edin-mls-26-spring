@@ -642,8 +642,8 @@ def get_activation(name: str):
 class Linear:
     """Linear layer with switchable backend (torch or Triton)."""
 
-    TILE_M = 64
-    TILE_N = 64
+    TILE_M = 128
+    TILE_N = 128
     TILE_K = 32
 
     BACKEND = "torch"
@@ -761,6 +761,7 @@ class Linear:
             BLOCK_M=self.TILE_M,
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
+            num_warps=8,
         )
 
         output = output[:M, :N]
@@ -850,7 +851,7 @@ class MLP:
     """MLP with SwiGLU gating using Triton."""
 
     FUSED = True
-    TILE_M, TILE_N, TILE_K = 64, 64, 32
+    TILE_M, TILE_N, TILE_K = 128, 128, 32
 
     def __init__(
         self,
@@ -945,7 +946,7 @@ class MLP:
             triton.cdiv(M_pad, self.TILE_M),
             triton.cdiv(N_pad, self.TILE_N),
         )
-        swiglu_fused_kernel[grid](
+        swiglu_fused_kernel[grid](  # Config B: TILE_M=128, TILE_N=128, num_warps=8
             x_padded,
             gate_w_padded,
             up_w_padded,
@@ -964,6 +965,7 @@ class MLP:
             BLOCK_M=self.TILE_M,
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
+            num_warps=8,
         )
 
         if M != M_pad or N != N_pad:
@@ -977,7 +979,7 @@ class EncoderMLP:
     """Encoder MLP (no gating) using Triton."""
 
     FUSED = True
-    TILE_M, TILE_N, TILE_K = 64, 64, 32
+    TILE_M, TILE_N, TILE_K = 128, 128, 32
 
     def __init__(
         self,
@@ -1067,6 +1069,7 @@ class EncoderMLP:
             BLOCK_M=self.TILE_M,
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
+            num_warps=8,
         )
 
         if M != M_pad or N != N_pad:
