@@ -132,3 +132,29 @@ GPU: saxa cluster node
 | Speed | 110.78ms/tok | 105.98ms/tok | 105.69ms/tok | **-5.1ms/tok** | **-0.29ms/tok** |
 
 Config C is marginally the best (3.8ms faster than B, within noise), but both B and C represent a significant improvement over the baseline. Config C kept as the active configuration.
+
+**Config D:** `TILE_M=256, TILE_N=64, TILE_K=32, num_warps=8`
+- Doubled TILE_M from 128→256 (each program processes 256 output rows at once)
+- Returned TILE_K to 32 (shallower K accumulation)
+- Hypothesis: taller M tile would reduce kernel launch overhead for long sequences
+- Result: **slower than C** — 256-row tiles exceed register budget, causing spilling
+
+```
+Time:   1436.8ms (+/- 1.8ms)
+Tokens: 13
+Speed:  110.53ms/token
+
+Accuracy: 100.0%
+Status:   PASS
+```
+
+GPU: saxa cluster node
+
+| | Config A | Config B | Config C | Config D |
+|---|---|---|---|---|
+| Tiles | 64×64×32 | 128×128×32 | 128×64×64 | 256×64×32 |
+| num_warps | 4 | 8 | 8 | 8 |
+| Time | 1440.2ms | 1377.8ms | **1374.0ms** | 1436.8ms |
+| Speed | 110.78ms/tok | 105.98ms/tok | **105.69ms/tok** | 110.53ms/tok |
+
+**Winner: Config C** (`TILE_M=128, TILE_N=64, TILE_K=64, num_warps=8`) — best balance of tile size and register pressure. Reverted to Config C as the final configuration.
