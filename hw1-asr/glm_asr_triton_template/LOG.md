@@ -57,3 +57,24 @@ Expected: each section prints `Input: ... -> Output: ...` with matching shapes a
 cd hw1-asr/glm_asr_triton_template && python layers.py   # RMSNorm, LayerNorm, Softmax
 cd hw1-asr/glm_asr_triton_template && python attention.py  # partial (softmax_inplace only)
 ```
+
+---
+
+## Phase 3 — Tiled Matrix Multiply (2026-02-22)
+
+### What was implemented
+
+**`linear_kernel_tf32`** (`layers.py`):
+- Grid: `(M // BLOCK_M, N // BLOCK_N)` — one program per output tile
+- Each program accumulates a `BLOCK_M × BLOCK_N` output tile in FP32
+- Loops over K in steps of `BLOCK_K`, loading A tile `(BLOCK_M, BLOCK_K)` and B tile `(BLOCK_K, BLOCK_N)`, accumulating via `tl.dot(..., input_precision="tf32")` for TF32 tensor cores
+- Stores result with bounds mask
+- Default tiles: `BLOCK_M=64, BLOCK_N=64, BLOCK_K=32`
+
+Also updated `__main__` test to run both Triton and Torch backends and print the max diff for correctness validation.
+
+### How to test
+```bash
+cd hw1-asr/glm_asr_triton_template && python layers.py
+```
+Expected: `Max diff vs torch: ~0.0` (small numerical difference due to TF32 rounding is OK)

@@ -172,16 +172,30 @@ def linear_kernel_tf32(
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
-    # ============================================================================
-    # TODO: Implement tiled matrix multiplication
-    # ============================================================================
-    #
-    # Step 1: Initialize accumulator
-    # Step 2: Loop over K tiles and accumulate tl.dot
-    # Step 3: Store the result
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
 
-    # YOUR CODE HERE
-    pass
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(
+            a_ptr + offs_m[:, None] * stride_am + (k + offs_k[None, :]) * stride_ak,
+            mask=(offs_m[:, None] < M) & (k + offs_k[None, :] < K),
+            other=0.0,
+        )
+        b = tl.load(
+            b_ptr + (k + offs_k[:, None]) * stride_bk + offs_n[None, :] * stride_bn,
+            mask=(k + offs_k[:, None] < K) & (offs_n[None, :] < N),
+            other=0.0,
+        )
+        acc += tl.dot(a, b, input_precision="tf32")
+
+    tl.store(
+        c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,
+        acc,
+        mask=(offs_m[:, None] < M) & (offs_n[None, :] < N),
+    )
 
 
 @triton.jit
@@ -1091,10 +1105,16 @@ if __name__ == "__main__":
     y = silu(x)
     print(f"Input: {x.shape} -> Output: {y.shape}")
 
-    print("\n=== Linear ===")
+    print("\n=== Linear (Triton) ===")
+    Linear.BACKEND = "triton"
     linear = Linear(256, 512)
-    y = linear(x)
-    print(f"Input: {x.shape} -> Output: {y.shape}")
+    linear.weight = torch.randn(512, 256, device=device)
+    y_triton = linear(x)
+    Linear.BACKEND = "torch"
+    y_torch = linear(x)
+    max_diff = float((y_triton - y_torch).abs().max())
+    print(f"Input: {x.shape} -> Output: {y_triton.shape}")
+    print(f"Max diff vs torch: {max_diff:.6f} (should be ~0)")
 
     print("\n=== Embedding ===")
     emb = Embedding(1000, 256)
