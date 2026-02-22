@@ -214,8 +214,91 @@ def test_flash_attention():
     print("[PASS] FlashAttention Passed!")
 
 
+def benchmark_attention(seq_len, n_warmup=20, n_iter=100):
+    """Benchmark simple_attention vs flash_attention at a given sequence length."""
+    D = 64
+    BLOCK_M = 32
+    BLOCK_N = 32
+    scale = 1.0 / math.sqrt(D)
+
+    q = torch.randn((seq_len, D), device="cuda", dtype=torch.float32)
+    k = torch.randn((seq_len, D), device="cuda", dtype=torch.float32)
+    v = torch.randn((seq_len, D), device="cuda", dtype=torch.float32)
+    out = torch.zeros((seq_len, D), device="cuda", dtype=torch.float32)
+
+    stride_qm, stride_qd = q.stride()
+    stride_km, stride_kd = k.stride()
+    stride_vm, stride_vd = v.stride()
+    stride_om, stride_od = out.stride()
+
+    grid = (triton.cdiv(seq_len, BLOCK_M),)
+
+    def run_simple():
+        simple_attention[grid](
+            q, k, v, out, seq_len,
+            stride_qm, stride_qd,
+            stride_km, stride_kd,
+            stride_vm, stride_vd,
+            stride_om, stride_od,
+            scale,
+            SEQ_LEN_K=seq_len,
+            HEAD_DIM=D,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            num_warps=4,
+            num_stages=2,
+        )
+
+    def run_flash():
+        flash_attention[grid](
+            q, k, v, out,
+            stride_qm, stride_qd,
+            stride_km, stride_kd,
+            stride_vm, stride_vd,
+            stride_om, stride_od,
+            seq_len, seq_len,
+            scale,
+            HEAD_DIM=D,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            num_warps=4,
+            num_stages=2,
+        )
+
+    def time_fn(fn):
+        for _ in range(n_warmup):
+            fn()
+        torch.cuda.synchronize()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(n_iter):
+            fn()
+        end.record()
+        end.synchronize()
+        return start.elapsed_time(end) / n_iter
+
+    t_simple = time_fn(run_simple)
+    t_flash  = time_fn(run_flash)
+    return t_simple, t_flash
+
+
+def test_performance():
+    seq_lens = [128, 256, 512, 1024, 2048]
+
+    print("\n== Attention Performance Benchmark ==")
+    print(f"{'Seq Len':<10} | {'Simple (ms)':<14} | {'Flash (ms)':<14} | {'Speedup':<10}")
+    print("-" * 56)
+
+    for seq_len in seq_lens:
+        t_simple, t_flash = benchmark_attention(seq_len)
+        speedup = t_simple / t_flash
+        print(f"{seq_len:<10} | {t_simple:<14.4f} | {t_flash:<14.4f} | {speedup:<10.2f}x")
+
+
 if __name__ == "__main__":
     test_attention()
     test_flash_attention()
+    test_performance()
 
 
