@@ -60,17 +60,15 @@ def rmsnorm_kernel(
     """
     pid = tl.program_id(0)
 
-    # ============================================================================
-    # TODO: Implement RMSNorm kernel
-    # ============================================================================
-    #
-    # Step 1: Load input row and weight
-    # Step 2: Compute variance = mean(x^2)
-    # Step 3: Normalize: x / sqrt(variance + eps)
-    # Step 4: Apply weight and store
+    offs = tl.arange(0, BLOCK_SIZE)
+    mask = offs < hidden_size
 
-    # YOUR CODE HERE
-    pass
+    x = tl.load(x_ptr + pid * stride_x + offs, mask=mask, other=0.0).to(tl.float32)
+    var = tl.sum(x * x, axis=0) / hidden_size
+    x_norm = x * tl.rsqrt(var + eps)
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0)
+    y = x_norm * w
+    tl.store(y_ptr + pid * stride_y + offs, y, mask=mask)
 
 
 @triton.jit
@@ -94,18 +92,18 @@ def layernorm_kernel(
     """
     pid = tl.program_id(0)
 
-    # ============================================================================
-    # TODO: Implement LayerNorm kernel
-    # ============================================================================
-    #
-    # Step 1: Load input, weight, and bias
-    # Step 2: Compute mean
-    # Step 3: Center the data
-    # Step 4: Compute variance = mean((x - mean)^2)
-    # Step 5: Normalize and apply affine transform
+    offs = tl.arange(0, BLOCK_SIZE)
+    mask = offs < hidden_size
 
-    # YOUR CODE HERE
-    pass
+    x = tl.load(x_ptr + pid * stride_x + offs, mask=mask, other=0.0).to(tl.float32)
+    mean = tl.sum(x, axis=0) / hidden_size
+    x_centered = x - mean
+    var = tl.sum(x_centered * x_centered, axis=0) / hidden_size
+    x_norm = x_centered * tl.rsqrt(var + eps)
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0)
+    b = tl.load(b_ptr + offs, mask=mask, other=0.0)
+    y = x_norm * w + b
+    tl.store(y_ptr + pid * stride_y + offs, y, mask=mask)
 
 
 @triton.jit
@@ -334,17 +332,15 @@ def softmax_kernel(x_ptr, y_ptr, stride_x, stride_y, n_cols, BLOCK_SIZE: tl.cons
     """
     row = tl.program_id(0)
 
-    # ============================================================================
-    # TODO: Implement softmax kernel
-    # ============================================================================
-    #
-    # Step 1: Load row with masking
-    # Step 2: Subtract max for stability
-    # Step 3: Compute exp and normalize
-    # Step 4: Store output
+    offs = tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_cols
 
-    # YOUR CODE HERE
-    pass
+    x = tl.load(x_ptr + row * stride_x + offs, mask=mask, other=-float("inf"))
+    x = x - tl.max(x, axis=0)
+    exp_x = tl.exp(x)
+    denom = tl.sum(exp_x, axis=0)
+    y = exp_x / denom
+    tl.store(y_ptr + row * stride_y + offs, y, mask=mask)
 
 
 @triton.jit

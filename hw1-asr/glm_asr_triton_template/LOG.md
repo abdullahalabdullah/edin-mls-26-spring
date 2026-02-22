@@ -29,3 +29,31 @@ The remaining TODOs (rmsnorm, layernorm, softmax, linear) are unimplemented stub
 cd hw1-asr/glm_asr_triton_template && python layers.py
 ```
 Expected: each section prints `Input: ... -> Output: ...` with matching shapes and no errors.
+
+---
+
+## Phase 2 — Reductions (2026-02-22)
+
+### What was implemented
+
+**`rmsnorm_kernel`** (`layers.py`):
+- Grid: `(batch_size,)` — one program per row
+- Load row → cast to FP32 → `var = sum(x*x) / hidden_size` → `x_norm = x * rsqrt(var + eps)` → multiply weight → store
+
+**`layernorm_kernel`** (`layers.py`):
+- Grid: `(batch_size,)` — same shape as RMSNorm
+- Load row → mean → center → variance → normalize → multiply weight + add bias → store
+
+**`softmax_kernel`** (`layers.py`):
+- Grid: `(num_rows,)` — one program per row
+- Numerically stable: load with `other=-inf` → subtract max → exp → sum → divide → store
+
+**`softmax_inplace_kernel`** (`attention.py`):
+- Grid: `(batch * num_heads * seq_q,)` — one program per attention score row
+- Same numerically stable softmax, reads and writes back to the same pointer
+
+### How to test
+```bash
+cd hw1-asr/glm_asr_triton_template && python layers.py   # RMSNorm, LayerNorm, Softmax
+cd hw1-asr/glm_asr_triton_template && python attention.py  # partial (softmax_inplace only)
+```
