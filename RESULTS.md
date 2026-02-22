@@ -106,3 +106,29 @@ GPU: saxa cluster node
 | Speed | 110.78ms/tok | 105.98ms/tok | **-4.8ms/tok** |
 
 Config B is the new best — **62ms faster** than fused baseline, **101ms faster** than the example reference.
+
+**Config C:** `TILE_M=128, TILE_N=64, TILE_K=64, num_warps=8`
+- Kept TILE_M=128 and num_warps=8 from Config B
+- Narrowed TILE_N from 128→64 (smaller output tile width)
+- Doubled TILE_K from 32→64 (deeper K-dimension accumulation per loop iteration)
+- Halving the K loop iterations reduces loop overhead and improves arithmetic intensity per kernel launch
+
+```
+Time:   1374.0ms (+/- 10.7ms)
+Tokens: 13
+Speed:  105.69ms/token
+
+Accuracy: 100.0%
+Status:   PASS
+```
+
+GPU: saxa cluster node
+
+| | Config A | Config B | Config C | vs A | vs B |
+|---|---|---|---|---|---|
+| Tiles | 64×64×32 | 128×128×32 | 128×64×64 | — | — |
+| num_warps | 4 | 8 | 8 | — | — |
+| Time | 1440.2ms | 1377.8ms | 1374.0ms | **-4.6%** | **-3.8ms** |
+| Speed | 110.78ms/tok | 105.98ms/tok | 105.69ms/tok | **-5.1ms/tok** | **-0.29ms/tok** |
+
+Config C is marginally the best (3.8ms faster than B, within noise), but both B and C represent a significant improvement over the baseline. Config C kept as the active configuration.
