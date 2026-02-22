@@ -643,8 +643,8 @@ class Linear:
     """Linear layer with switchable backend (torch or Triton)."""
 
     TILE_M = 128
-    TILE_N = 128
-    TILE_K = 32
+    TILE_N = 64
+    TILE_K = 64
 
     BACKEND = "torch"
 
@@ -851,7 +851,7 @@ class MLP:
     """MLP with SwiGLU gating using Triton."""
 
     FUSED = True
-    TILE_M, TILE_N, TILE_K = 128, 128, 32
+    TILE_M, TILE_N, TILE_K = 128, 64, 64
 
     def __init__(
         self,
@@ -946,7 +946,7 @@ class MLP:
             triton.cdiv(M_pad, self.TILE_M),
             triton.cdiv(N_pad, self.TILE_N),
         )
-        swiglu_fused_kernel[grid](  # Config B: TILE_M=128, TILE_N=128, num_warps=8
+        swiglu_fused_kernel[grid](  # Config C: TILE_M=128, TILE_N=64, TILE_K=64, num_warps=8
             x_padded,
             gate_w_padded,
             up_w_padded,
@@ -979,7 +979,7 @@ class EncoderMLP:
     """Encoder MLP (no gating) using Triton."""
 
     FUSED = True
-    TILE_M, TILE_N, TILE_K = 128, 128, 32
+    TILE_M, TILE_N, TILE_K = 128, 64, 64
 
     def __init__(
         self,
