@@ -76,3 +76,33 @@ Kernels implemented: silu, gelu, rmsnorm, layernorm, softmax, softmax_inplace, l
 Fused kernels save ~38ms by combining matmul + activation into a single kernel pass, eliminating intermediate memory round-trips.
 
 
+
+### Tile/block size tuning
+
+**Baseline (Config A):** `TILE_M=64, TILE_N=64, TILE_K=32, num_warps=4`
+
+**Config B:** `TILE_M=128, TILE_N=128, TILE_K=32, num_warps=8`
+- Doubled both output tile dimensions (M and N) so each program computes a 128×128 output block instead of 64×64
+- Doubled num_warps from 4→8 to match the larger register footprint per program
+- Applied to `Linear`, `MLP` (swiglu_fused_kernel), and `EncoderMLP` (linear_gelu_kernel)
+- Larger tiles amortise kernel launch overhead and improve L2 cache reuse for the model's large hidden sizes (audio: 1280, text: 2048)
+
+```
+Time:   1377.8ms (+/- 15.4ms)
+Tokens: 13
+Speed:  105.98ms/token
+
+Accuracy: 100.0%
+Status:   PASS
+```
+
+GPU: saxa cluster node
+
+| | Config A (baseline) | Config B | Delta |
+|---|---|---|---|
+| Tiles | 64×64×32 | 128×128×32 | — |
+| num_warps | 4 | 8 | — |
+| Time | 1440.2ms | 1377.8ms | **-62.4ms (4.3% faster)** |
+| Speed | 110.78ms/tok | 105.98ms/tok | **-4.8ms/tok** |
+
+Config B is the new best — **62ms faster** than fused baseline, **101ms faster** than the example reference.
