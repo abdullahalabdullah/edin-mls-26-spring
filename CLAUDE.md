@@ -22,7 +22,6 @@ source utils/setup-cutile.sh -y
 
 # Verify environment
 python triton-tutorial/0-environment/check.py
-python cutile-tutorial/0-environment/check.py
 ```
 
 Setup scripts auto-install conda environments with Python 3.11, torch, triton/cuTile, cupy, and ML dependencies.
@@ -42,8 +41,8 @@ Each lesson has a `README.md` with explanation and a Python file to run directly
 cd hw1-asr
 
 # Run benchmarks (pass directory name, not path)
-./benchmark.sh glm_asr_triton_example       # reference
-./benchmark.sh glm_asr_triton_template      # student implementation
+./benchmark.sh glm_asr_triton_example       # Triton reference
+./benchmark.sh glm_asr_triton_template      # student Triton implementation
 
 # Detailed profiling
 ./benchmark_detailed.sh glm_asr_triton_template
@@ -62,7 +61,7 @@ python hw1-asr/benchmark_detailed.py glm_asr_triton_example
 
 **Data flow**: Audio (wav) → AudioEncoder → Projector → TextDecoder → Text
 
-Each implementation variant (`glm_asr_scratch`, `glm_asr_triton_example`, `glm_asr_cutile_example`, `glm_asr_triton_template`, `glm_asr_cutile_template`) shares this file layout:
+Each implementation variant (`glm_asr_scratch`, `glm_asr_triton_example`, `glm_asr_triton_template`) shares this file layout:
 
 | File | Role |
 |------|------|
@@ -149,13 +148,7 @@ edin-mls-26-spring/
 │   ├── glm_asr_triton_example/         # Complete Triton GPU reference implementation
 │   │   └── (same files as scratch, minus config/audio/tokenizer/torch_glm)
 │   │
-│   ├── glm_asr_triton_template/        # Student starting point for Triton track
-│   │   └── (same files; layers.py + attention.py have TODO stubs)
-│   │
-│   ├── glm_asr_cutile_example/         # Complete cuTile GPU reference implementation
-│   │   └── (same files as triton_example, using cuTile/CuPy kernels)
-│   │
-│   └── glm_asr_cutile_template/        # Student starting point for cuTile track
+│   └── glm_asr_triton_template/        # Student starting point for Triton track
 │       └── (same files; layers.py + attention.py have TODO stubs)
 ```
 
