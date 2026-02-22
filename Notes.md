@@ -45,6 +45,30 @@ Status:   PASS
 GPU: saxa cluster node
 Kernels implemented: silu, gelu, rmsnorm, layernorm, softmax, softmax_inplace, linear_kernel_tf32, attention_scores, attention_output, compute_freqs (RoPE)
 
+### glm_asr_triton_example (reference baseline)
+
+```
+Time:   1478.9ms (+/- 0.5ms)
+Tokens: 13
+Speed:  113.76ms/token
+
+Transcription: Concord returned to its place amidst the tents.
+Accuracy: 100.0%
+Status:   PASS
+```
+
+GPU: saxa cluster node
+
+### Comparison
+
+| | Template | Example | Delta |
+|---|---|---|---|
+| Time | 1440.2ms | 1478.9ms | **-38.7ms (2.6% faster)** |
+| Speed | 110.78ms/tok | 113.76ms/tok | **-2.98ms/tok** |
+| Accuracy | 100% | 100% | — |
+
+Template is already faster than the example before Phase 7 optimisations.
+
 ## Grading
 
 | | Points | Requirement |
