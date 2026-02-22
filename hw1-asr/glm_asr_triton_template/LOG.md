@@ -124,3 +124,46 @@ Expected: all 4 tests pass with non-zero output statistics (Mean/Std/Min/Max non
 cd hw1-asr/glm_asr_triton_template && python rope.py
 ```
 Expected: shapes print correctly and no errors
+
+---
+
+## Phase 7b — Tile Config C restored (2026-02-22)
+
+Reverted tile settings back to the best config found during tuning (Config C):
+- `Linear.TILE_M = 128, TILE_N = 64, TILE_K = 64, num_warps = 8`
+- `MLP.TILE_M, TILE_N, TILE_K = 128, 64, 64, num_warps = 8`
+- `EncoderMLP.TILE_M, TILE_N, TILE_K = 128, 64, 64, num_warps = 8`
+
+Config C was the overall winner from tile tuning experiments (1374.0ms, vs 1440.2ms for the Config A baseline).
+
+---
+
+## Phase 7c — FlashAttention (2026-02-22)
+
+### What was implemented
+
+**`flash_attention_kernel`** (`attention.py`):
+- Grid: `(batch * num_heads, seq_q)` — one program per query position
+- Loads Q vector `(head_dim,)` once for this query position
+- Iterates over K/V in `BLOCK_K=64`-tile chunks with **online softmax** (no full score matrix materialised in HBM)
+- Per tile:
+  1. Load K tile `(BLOCK_K, head_dim)` → compute `scores = dot(q, k^T) * scale` → shape `(BLOCK_K,)`
+  2. Apply causal mask if `is_causal` (compile-time constexpr branch)
+  3. Online softmax update: `m_new = max(m_i, max(scores_block))`, rescale previous `acc` by `exp(m_i - m_new)`, accumulate `exp(scores - m_new) * V`
+  4. Load V tile `(BLOCK_K, head_dim)` → weighted sum into `acc (BLOCK_D,)`
+- Normalize: `out = acc / l_i`
+- Store result with `mask=offs_d < head_dim`
+- SRAM footprint: `O(seq_k * head_dim)` per program vs. `O(seq_q * seq_k)` for the 3-kernel approach
+
+The original 3-kernel approach (attention_scores_kernel → softmax_inplace_kernel → attention_output_kernel) is commented out in `scaled_dot_product_attention` and preserved for reference.
+
+**Selection logic in `scaled_dot_product_attention`**:
+- `use_flash = q.is_cuda and head_dim_padded <= MAX_ATTENTION_DIM and attention_mask is None`
+- When `attention_mask is not None` (e.g. cross-attention padding), falls back to torch
+
+### How to test
+```bash
+cd hw1-asr/glm_asr_triton_template && python attention.py
+./benchmark.sh glm_asr_triton_template
+```
+Expected: attention.py tests pass; benchmark shows 100% accuracy.
