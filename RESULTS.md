@@ -1,6 +1,6 @@
 # HW1 End-to-End Benchmark Results
 
-### glm_asr_triton_template (all kernels implemented - Phases 1-6 completed)
+### glm_asr_triton_template (all kernels implemented - Phases 1-6, fused kernels ON)
 
 ```
 Time:   1440.2ms (+/- 0.2ms)
@@ -15,6 +15,7 @@ Status:   PASS
 ```
 
 GPU: saxa cluster node
+Config: MLP.FUSED = True, EncoderMLP.FUSED = True
 Kernels implemented: silu, gelu, rmsnorm, layernorm, softmax, softmax_inplace, linear_kernel_tf32, attention_scores, attention_output, compute_freqs (RoPE)
 
 ### glm_asr_triton_example (reference baseline)
