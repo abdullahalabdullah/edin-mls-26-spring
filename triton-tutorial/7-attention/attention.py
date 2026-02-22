@@ -102,5 +102,120 @@ def test_attention():
     print("[PASS] Tiled Attention Passed!")
 
 
+@triton.jit
+def flash_attention(Q, K, V, Out,
+                    stride_qm, stride_qd,
+                    stride_km, stride_kd,
+                    stride_vm, stride_vd,
+                    stride_om, stride_od,
+                    M, N,
+                    SCALE,
+                    HEAD_DIM: tl.constexpr,
+                    BLOCK_M: tl.constexpr,
+                    BLOCK_N: tl.constexpr):
+    pid_m = tl.program_id(0)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, HEAD_DIM)
+
+    # Load Q tile once — stays in registers for the entire loop
+    q_ptrs = Q + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qd
+    q = tl.load(q_ptrs, mask=(offs_m[:, None] < M) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+
+    # Online softmax state per query row
+    m_i = tl.full((BLOCK_M,), value=float("-inf"), dtype=tl.float32)  # running max
+    l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)                       # running sum (denominator)
+    acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)              # weighted V accumulator
+
+    for k_start in range(0, N, BLOCK_N):
+        offs_n = k_start + tl.arange(0, BLOCK_N)
+
+        k_ptrs = K + offs_n[:, None] * stride_km + offs_d[None, :] * stride_kd
+        v_ptrs = V + offs_n[:, None] * stride_vm + offs_d[None, :] * stride_vd
+
+        k = tl.load(k_ptrs, mask=(offs_n[:, None] < N) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+        v = tl.load(v_ptrs, mask=(offs_n[:, None] < N) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+
+        # Scaled dot-product scores: (BLOCK_M, BLOCK_N)
+        scores = tl.dot(q, tl.trans(k), input_precision="ieee") * SCALE
+
+        # Update running max across this tile's keys
+        m_new = tl.maximum(m_i, tl.max(scores, axis=1))  # (BLOCK_M,)
+
+        # Numerically stable exp: subtract running max before exponentiating
+        p = tl.exp(scores - m_new[:, None])               # (BLOCK_M, BLOCK_N)
+
+        # Rescale old accumulator and sum to account for updated max
+        alpha = tl.exp(m_i - m_new)                       # (BLOCK_M,)
+        l_i = alpha * l_i + tl.sum(p, axis=1)             # (BLOCK_M,)
+        acc = acc * alpha[:, None] + tl.dot(p, v, input_precision="ieee")
+
+        m_i = m_new
+
+    # Divide by the accumulated softmax denominator
+    acc = acc / l_i[:, None]
+
+    out_ptrs = Out + offs_m[:, None] * stride_om + offs_d[None, :] * stride_od
+    mask_out = (offs_m[:, None] < M) & (offs_d[None, :] < HEAD_DIM)
+    tl.store(out_ptrs, acc, mask=mask_out)
+
+
+def test_flash_attention():
+    M = 128  # Number of Queries
+    N = 128  # Number of Keys/Values
+    D = 64   # Head Dimension
+
+    BLOCK_M = 32
+    BLOCK_N = 32
+
+    print(f"FlashAttention Problem: Q({M}x{D}) @ K({N}x{D}).T @ V({N}x{D})")
+
+    q = torch.randn((M, D), device="cuda", dtype=torch.float32)
+    k = torch.randn((N, D), device="cuda", dtype=torch.float32)
+    v = torch.randn((N, D), device="cuda", dtype=torch.float32)
+    out = torch.zeros((M, D), device="cuda", dtype=torch.float32)
+
+    stride_qm, stride_qd = q.stride()
+    stride_km, stride_kd = k.stride()
+    stride_vm, stride_vd = v.stride()
+    stride_om, stride_od = out.stride()
+
+    scale = 1.0 / math.sqrt(D)
+
+    grid = (triton.cdiv(M, BLOCK_M),)
+
+    flash_attention[grid](
+        q, k, v, out,
+        stride_qm, stride_qd,
+        stride_km, stride_kd,
+        stride_vm, stride_vd,
+        stride_om, stride_od,
+        M, N,
+        scale,
+        HEAD_DIM=D,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        num_warps=4,
+        num_stages=2,
+    )
+
+    # Reference: proper softmax attention (not the unnormalized exp used in simple_attention)
+    q_cpu = q.cpu()
+    k_cpu = k.cpu()
+    v_cpu = v.cpu()
+    scores_ref = (q_cpu @ k_cpu.T) * scale          # (M, N)
+    attn_ref = torch.softmax(scores_ref, dim=-1)     # (M, N) — normalized
+    expected = attn_ref @ v_cpu                      # (M, D)
+
+    out_cpu = out.cpu()
+
+    print("Checking accuracy...")
+    torch.testing.assert_close(out_cpu, expected, rtol=1e-3, atol=1e-3)
+    print("[PASS] FlashAttention Passed!")
+
+
 if __name__ == "__main__":
     test_attention()
+    test_flash_attention()
+
+
