@@ -124,7 +124,7 @@ def gelu_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     sqrt_2_over_pi = 0.7978845608028654
     x3 = x * x * x
     inner = sqrt_2_over_pi * (x + 0.044715 * x3)
-    y = x * 0.5 * (1.0 + tl.libdevice.tanh(inner))
+    y = x * 0.5 * (1.0 + tl.extra.cuda.libdevice.tanh(inner))
     tl.store(y_ptr + offs, y, mask=mask)
 
 
