@@ -104,3 +104,23 @@ Expected: `Max diff vs torch: ~0.0` (small numerical difference due to TF32 roun
 cd hw1-asr/glm_asr_triton_template && python attention.py
 ```
 Expected: all 4 tests pass with non-zero output statistics (Mean/Std/Min/Max non-zero)
+
+---
+
+## Phase 5 — Rotary Position Embeddings (2026-02-22)
+
+### What was implemented
+
+**`compute_freqs_kernel`** (`rope.py`):
+- Grid: `(seq_len,)` — one program per sequence position
+- Loads position scalar `pos` from the positions array
+- Loads `inv_freq` vector of size `half_dim` (= `rotary_dim // 2`)
+- Computes `freqs = pos * inv_freq` (element-wise)
+- Computes `cos_half = cos(freqs)`, `sin_half = sin(freqs)`
+- Stores both halves duplicated: `cos_cache[pos, :half_dim] = cos_half` and `cos_cache[pos, half_dim:] = cos_half` (same for sin). This gives `cos_cache` shape `(seq_len, rotary_dim)` with the first and second halves identical, which is what `_apply_rope_single` expects.
+
+### How to test
+```bash
+cd hw1-asr/glm_asr_triton_template && python rope.py
+```
+Expected: shapes print correctly and no errors
