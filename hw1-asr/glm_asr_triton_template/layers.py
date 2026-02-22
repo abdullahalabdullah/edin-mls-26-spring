@@ -762,6 +762,7 @@ class Linear:
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
             num_warps=8,
+            num_stages=2,
         )
 
         output = output[:M, :N]
@@ -966,6 +967,7 @@ class MLP:
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
             num_warps=8,
+            num_stages=2,
         )
 
         if M != M_pad or N != N_pad:
@@ -1070,6 +1072,7 @@ class EncoderMLP:
             BLOCK_N=self.TILE_N,
             BLOCK_K=self.TILE_K,
             num_warps=8,
+            num_stages=2,
         )
 
         if M != M_pad or N != N_pad:
