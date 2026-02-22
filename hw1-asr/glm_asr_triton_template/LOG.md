@@ -78,3 +78,29 @@ Also updated `__main__` test to run both Triton and Torch backends and print the
 cd hw1-asr/glm_asr_triton_template && python layers.py
 ```
 Expected: `Max diff vs torch: ~0.0` (small numerical difference due to TF32 rounding is OK)
+
+---
+
+## Phase 4 — Attention Kernels (2026-02-22)
+
+### What was implemented
+
+**`attention_scores_kernel`** (`attention.py`):
+- Grid: `(batch * num_heads, seq_q)` — one program per (head, query position)
+- Loads Q vector `(head_dim,)` for this query position
+- Loads all K vectors `(seq_k, head_dim)` for this head in one block
+- Computes `scores = sum(k * q[None, :], axis=1) * scale` — dot product for each key position
+- Stores score row `(seq_k,)`
+
+**`attention_output_kernel`** (`attention.py`):
+- Grid: `(batch * num_heads, seq_q)` — one program per (head, query position)
+- Loads attention weights row `(seq_k,)` (post-softmax)
+- Loads all V vectors `(seq_k, head_dim)` for this head in one block
+- Computes `out = sum(v * w[:, None], axis=0)` — weighted sum over key positions
+- Stores output row `(head_dim,)`
+
+### How to test
+```bash
+cd hw1-asr/glm_asr_triton_template && python attention.py
+```
+Expected: all 4 tests pass with non-zero output statistics (Mean/Std/Min/Max non-zero)
