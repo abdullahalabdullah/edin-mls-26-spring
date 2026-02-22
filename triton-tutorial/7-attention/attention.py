@@ -214,8 +214,104 @@ def test_flash_attention():
     print("[PASS] FlashAttention Passed!")
 
 
+@triton.jit
+def two_pass_attention(Q, K, V, Out,
+                       stride_qm, stride_qd,
+                       stride_km, stride_kd,
+                       stride_vm, stride_vd,
+                       stride_om, stride_od,
+                       M, N,
+                       SCALE,
+                       HEAD_DIM: tl.constexpr,
+                       BLOCK_M: tl.constexpr,
+                       BLOCK_N: tl.constexpr):
+    """Correct two-pass attention: pass 1 finds the row max, pass 2 normalizes.
+    Reads K twice (two full passes over the sequence), so it uses 2x the memory
+    bandwidth of flash_attention for the same correct result."""
+    pid_m = tl.program_id(0)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, HEAD_DIM)
+
+    q_ptrs = Q + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qd
+    q = tl.load(q_ptrs, mask=(offs_m[:, None] < M) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+
+    # Pass 1: scan all K tiles to find the global row max
+    row_max = tl.full((BLOCK_M,), value=float("-inf"), dtype=tl.float32)
+    for k_start in range(0, N, BLOCK_N):
+        offs_n = k_start + tl.arange(0, BLOCK_N)
+        k_ptrs = K + offs_n[:, None] * stride_km + offs_d[None, :] * stride_kd
+        k = tl.load(k_ptrs, mask=(offs_n[:, None] < N) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+        scores = tl.dot(q, tl.trans(k), input_precision="ieee") * SCALE
+        scores = tl.where(offs_n[None, :] < N, scores, float("-inf"))
+        row_max = tl.maximum(row_max, tl.max(scores, axis=1))
+
+    # Pass 2: now that we know the max, compute exp(scores - max), accumulate
+    row_sum = tl.zeros((BLOCK_M,), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, HEAD_DIM), dtype=tl.float32)
+    for k_start in range(0, N, BLOCK_N):
+        offs_n = k_start + tl.arange(0, BLOCK_N)
+        k_ptrs = K + offs_n[:, None] * stride_km + offs_d[None, :] * stride_kd
+        v_ptrs = V + offs_n[:, None] * stride_vm + offs_d[None, :] * stride_vd
+        k = tl.load(k_ptrs, mask=(offs_n[:, None] < N) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+        v = tl.load(v_ptrs, mask=(offs_n[:, None] < N) & (offs_d[None, :] < HEAD_DIM), other=0.0)
+        scores = tl.dot(q, tl.trans(k), input_precision="ieee") * SCALE
+        scores = tl.where(offs_n[None, :] < N, scores, float("-inf"))
+        p = tl.exp(scores - row_max[:, None])
+        row_sum += tl.sum(p, axis=1)
+        acc += tl.dot(p, v, input_precision="ieee")
+
+    acc = acc / row_sum[:, None]
+
+    out_ptrs = Out + offs_m[:, None] * stride_om + offs_d[None, :] * stride_od
+    mask_out = (offs_m[:, None] < M) & (offs_d[None, :] < HEAD_DIM)
+    tl.store(out_ptrs, acc, mask=mask_out)
+
+
+def test_two_pass_attention():
+    M = 128
+    N = 128
+    D = 64
+    BLOCK_M = 32
+    BLOCK_N = 32
+
+    print(f"TwoPassAttention Problem: Q({M}x{D}) @ K({N}x{D}).T @ V({N}x{D})")
+
+    q = torch.randn((M, D), device="cuda", dtype=torch.float32)
+    k = torch.randn((N, D), device="cuda", dtype=torch.float32)
+    v = torch.randn((N, D), device="cuda", dtype=torch.float32)
+    out = torch.zeros((M, D), device="cuda", dtype=torch.float32)
+
+    stride_qm, stride_qd = q.stride()
+    stride_km, stride_kd = k.stride()
+    stride_vm, stride_vd = v.stride()
+    stride_om, stride_od = out.stride()
+
+    scale = 1.0 / math.sqrt(D)
+    grid = (triton.cdiv(M, BLOCK_M),)
+
+    two_pass_attention[grid](
+        q, k, v, out,
+        stride_qm, stride_qd,
+        stride_km, stride_kd,
+        stride_vm, stride_vd,
+        stride_om, stride_od,
+        M, N, scale,
+        HEAD_DIM=D, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        num_warps=4, num_stages=2,
+    )
+
+    q_cpu, k_cpu, v_cpu = q.cpu(), k.cpu(), v.cpu()
+    scores_ref = (q_cpu @ k_cpu.T) * scale
+    expected = torch.softmax(scores_ref, dim=-1) @ v_cpu
+
+    print("Checking accuracy...")
+    torch.testing.assert_close(out.cpu(), expected, rtol=1e-3, atol=1e-3)
+    print("[PASS] TwoPass Attention Passed!")
+
+
 def benchmark_attention(seq_len, n_warmup=20, n_iter=100):
-    """Benchmark simple_attention vs flash_attention at a given sequence length."""
+    """Benchmark two_pass_attention (correct baseline) vs flash_attention."""
     D = 64
     BLOCK_M = 32
     BLOCK_N = 32
@@ -233,20 +329,16 @@ def benchmark_attention(seq_len, n_warmup=20, n_iter=100):
 
     grid = (triton.cdiv(seq_len, BLOCK_M),)
 
-    def run_simple():
-        simple_attention[grid](
-            q, k, v, out, seq_len,
+    def run_two_pass():
+        two_pass_attention[grid](
+            q, k, v, out,
             stride_qm, stride_qd,
             stride_km, stride_kd,
             stride_vm, stride_vd,
             stride_om, stride_od,
-            scale,
-            SEQ_LEN_K=seq_len,
-            HEAD_DIM=D,
-            BLOCK_M=BLOCK_M,
-            BLOCK_N=BLOCK_N,
-            num_warps=4,
-            num_stages=2,
+            seq_len, seq_len, scale,
+            HEAD_DIM=D, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            num_warps=4, num_stages=2,
         )
 
     def run_flash():
@@ -256,13 +348,9 @@ def benchmark_attention(seq_len, n_warmup=20, n_iter=100):
             stride_km, stride_kd,
             stride_vm, stride_vd,
             stride_om, stride_od,
-            seq_len, seq_len,
-            scale,
-            HEAD_DIM=D,
-            BLOCK_M=BLOCK_M,
-            BLOCK_N=BLOCK_N,
-            num_warps=4,
-            num_stages=2,
+            seq_len, seq_len, scale,
+            HEAD_DIM=D, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            num_warps=4, num_stages=2,
         )
 
     def time_fn(fn):
@@ -278,27 +366,28 @@ def benchmark_attention(seq_len, n_warmup=20, n_iter=100):
         end.synchronize()
         return start.elapsed_time(end) / n_iter
 
-    t_simple = time_fn(run_simple)
-    t_flash  = time_fn(run_flash)
-    return t_simple, t_flash
+    t_two_pass = time_fn(run_two_pass)
+    t_flash    = time_fn(run_flash)
+    return t_two_pass, t_flash
 
 
 def test_performance():
     seq_lens = [128, 256, 512, 1024, 2048]
 
-    print("\n== Attention Performance Benchmark ==")
-    print(f"{'Seq Len':<10} | {'Simple (ms)':<14} | {'Flash (ms)':<14} | {'Speedup':<10}")
-    print("-" * 56)
+    print("\n== Attention Performance Benchmark (both correct) ==")
+    print(f"{'Seq Len':<10} | {'TwoPass (ms)':<15} | {'Flash (ms)':<14} | {'Speedup':<10}")
+    print("-" * 58)
 
     for seq_len in seq_lens:
-        t_simple, t_flash = benchmark_attention(seq_len)
-        speedup = t_simple / t_flash
-        print(f"{seq_len:<10} | {t_simple:<14.4f} | {t_flash:<14.4f} | {speedup:<10.2f}x")
+        t_two_pass, t_flash = benchmark_attention(seq_len)
+        speedup = t_two_pass / t_flash
+        print(f"{seq_len:<10} | {t_two_pass:<15.4f} | {t_flash:<14.4f} | {speedup:<10.2f}x")
 
 
 if __name__ == "__main__":
     test_attention()
     test_flash_attention()
+    test_two_pass_attention()
     test_performance()
 
 
