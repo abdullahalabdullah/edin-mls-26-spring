@@ -25,3 +25,11 @@ Seq Len    | TwoPass (ms)    | Flash (ms)     | Speedup
 - Flash is consistently faster (~1.5–1.9x) because it eliminates the second pass over K
 - The speedup is noisy at small sizes due to cache effects and kernel launch overhead
 - The trend would be cleaner and larger at seq_len 4096+ where memory bandwidth dominates
+
+## Grading
+
+| | Points | Requirement |
+|---|---|---|
+| **Correctness** | 60 | Transcription accuracy > 80% |
+| **Performance** | 30 | Faster than the example baseline |
+| **Code quality** | 10 | Clean, readable kernels |
