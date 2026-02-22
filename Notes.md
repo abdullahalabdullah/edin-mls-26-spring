@@ -26,9 +26,9 @@ Seq Len    | TwoPass (ms)    | Flash (ms)     | Speedup
 - The speedup is noisy at small sizes due to cache effects and kernel launch overhead
 - The trend would be cleaner and larger at seq_len 4096+ where memory bandwidth dominates
 
-## HW1 End-to-End Benchmark Results
+## HW1 End-to-End Benchmark Results 
 
-### glm_asr_triton_template (all kernels implemented)
+### glm_asr_triton_template (all kernels implemented - Phases 1-6 completed)
 
 ```
 Time:   1440.2ms (+/- 0.2ms)
@@ -44,9 +44,6 @@ Status:   PASS
 
 GPU: saxa cluster node
 Kernels implemented: silu, gelu, rmsnorm, layernorm, softmax, softmax_inplace, linear_kernel_tf32, attention_scores, attention_output, compute_freqs (RoPE)
-
-### Next step
-Run `./benchmark.sh glm_asr_triton_example` to get the baseline time, then optimise to beat it (Phase 7).
 
 ## Grading
 
